@@ -94,6 +94,9 @@ class Style
     /** @var bool */
     private $isEmpty = true;
 
+    /** @var null|string The serialized style value. An empty string for an empty style. */
+    private $serializedStyle = '';
+
     /**
      * @return null|int
      */
@@ -129,7 +132,7 @@ class Style
     {
         $this->shouldApplyBorder = true;
         $this->border = $border;
-        $this->isEmpty = false;
+        $this->onChange();
 
         return $this;
     }
@@ -158,7 +161,7 @@ class Style
         $this->fontBold = true;
         $this->hasSetFontBold = true;
         $this->shouldApplyFont = true;
-        $this->isEmpty = false;
+        $this->onChange();
 
         return $this;
     }
@@ -187,7 +190,7 @@ class Style
         $this->fontItalic = true;
         $this->hasSetFontItalic = true;
         $this->shouldApplyFont = true;
-        $this->isEmpty = false;
+        $this->onChange();
 
         return $this;
     }
@@ -216,7 +219,7 @@ class Style
         $this->fontUnderline = true;
         $this->hasSetFontUnderline = true;
         $this->shouldApplyFont = true;
-        $this->isEmpty = false;
+        $this->onChange();
 
         return $this;
     }
@@ -245,7 +248,7 @@ class Style
         $this->fontStrikethrough = true;
         $this->hasSetFontStrikethrough = true;
         $this->shouldApplyFont = true;
-        $this->isEmpty = false;
+        $this->onChange();
 
         return $this;
     }
@@ -276,7 +279,7 @@ class Style
         $this->fontSize = $fontSize;
         $this->hasSetFontSize = true;
         $this->shouldApplyFont = true;
-        $this->isEmpty = false;
+        $this->onChange();
 
         return $this;
     }
@@ -309,7 +312,7 @@ class Style
         $this->fontColor = $fontColor;
         $this->hasSetFontColor = true;
         $this->shouldApplyFont = true;
-        $this->isEmpty = false;
+        $this->onChange();
 
         return $this;
     }
@@ -340,7 +343,7 @@ class Style
         $this->fontName = $fontName;
         $this->hasSetFontName = true;
         $this->shouldApplyFont = true;
-        $this->isEmpty = false;
+        $this->onChange();
 
         return $this;
     }
@@ -371,7 +374,7 @@ class Style
         $this->cellAlignment = $cellAlignment;
         $this->hasSetCellAlignment = true;
         $this->shouldApplyCellAlignment = true;
-        $this->isEmpty = false;
+        $this->onChange();
 
         return $this;
     }
@@ -409,7 +412,7 @@ class Style
     {
         $this->shouldWrapText = $shouldWrap;
         $this->hasSetWrapText = true;
-        $this->isEmpty = false;
+        $this->onChange();
 
         return $this;
     }
@@ -441,7 +444,7 @@ class Style
     {
         $this->hasSetBackgroundColor = true;
         $this->backgroundColor = $color;
-        $this->isEmpty = false;
+        $this->onChange();
 
         return $this;
     }
@@ -473,7 +476,7 @@ class Style
     {
         $this->hasSetFormat = true;
         $this->format = $format;
-        $this->isEmpty = false;
+        $this->onChange();
 
         return $this;
     }
@@ -545,5 +548,42 @@ class Style
     public function hasSetShrinkToFit()
     {
         return $this->hasSetShrinkToFit;
+    }
+
+    /**
+     * Fires when any actual style property is set.
+     */
+    protected function onChange()
+    {
+        $this->isEmpty = false;
+        $this->serializedStyle = null;
+        $this->id = null;
+        $this->isRegistered = false;
+    }
+
+    /**
+     * Serializes the style for future comparison with other styles.
+     * The ID is excluded from the comparison, as we only care about
+     * actual style properties.
+     *
+     * @return string The serialized style
+     */
+    public function serialize()
+    {
+        if (!isset($this->serializedStyle)) {
+            // In order to be able to properly compare style, set static ID value and reset registration
+            $id = $this->id;
+            $isRegistered = $this->isRegistered;
+
+            $this->id = 0;
+            $this->isRegistered = false;
+
+            $this->serializedStyle = serialize($this);
+
+            $this->id = $id;
+            $this->isRegistered = $isRegistered;
+        }
+
+        return $this->serializedStyle;
     }
 }

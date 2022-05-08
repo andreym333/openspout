@@ -135,9 +135,11 @@ class Row
      */
     public function toArray()
     {
-        return array_map(function (Cell $cell) {
-            return $cell->getValue();
-        }, $this->cells);
+        $values = [];
+        foreach ($this->cells as $cellIndex => $cell) {
+            $values[$cellIndex] = $cell->getValue();
+        }
+        return $values;
     }
 
     /**

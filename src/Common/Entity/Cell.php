@@ -67,10 +67,11 @@ class Cell
     /**
      * @param null|mixed $value
      */
-    public function __construct($value, Style $style = null)
+    public function __construct($value, Style $style = null, int $type = null)
     {
-        $this->setValue($value);
-        $this->setStyle($style);
+        $this->value = $value;
+        $this->type = ($type !== null) ? $type : $this->detectType($value);
+        $this->style = $style ?: new Style();
     }
 
     /**
@@ -87,7 +88,7 @@ class Cell
     public function setValue($value)
     {
         $this->value = $value;
-        $this->type = $this->detectType($value);
+        $this->type ??= $this->detectType($value);
     }
 
     /**
@@ -95,7 +96,7 @@ class Cell
      */
     public function getValue()
     {
-        return !$this->isError() ? $this->value : null;
+        return (self::TYPE_ERROR !== $this->type) ? $this->value : null;
     }
 
     /**

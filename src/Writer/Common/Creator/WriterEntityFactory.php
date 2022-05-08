@@ -114,8 +114,8 @@ class WriterEntityFactory
      *
      * @return Cell
      */
-    public static function createCell($cellValue, Style $cellStyle = null)
+    public static function createCell($cellValue, Style $cellStyle = null, int $cellType = null)
     {
-        return new Cell($cellValue, $cellStyle);
+        return new Cell($cellValue, $cellStyle, $cellType);
     }
 }

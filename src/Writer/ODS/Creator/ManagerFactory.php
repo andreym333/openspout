@@ -42,7 +42,7 @@ class ManagerFactory implements ManagerFactoryInterface
 
         $styleMerger = $this->createStyleMerger();
         $styleManager = $this->createStyleManager($optionsManager);
-        $worksheetManager = $this->createWorksheetManager($styleManager, $styleMerger);
+        $worksheetManager = $this->createWorksheetManager($optionsManager, $styleManager, $styleMerger);
 
         return new WorkbookManager(
             $workbook,
@@ -69,12 +69,21 @@ class ManagerFactory implements ManagerFactoryInterface
     /**
      * @return WorksheetManager
      */
-    private function createWorksheetManager(StyleManager $styleManager, StyleMerger $styleMerger)
-    {
+    private function createWorksheetManager(
+        OptionsManagerInterface $optionsManager,
+        StyleManager $styleManager,
+        StyleMerger $styleMerger
+    ) {
         $stringsEscaper = $this->helperFactory->createStringsEscaper();
         $stringsHelper = $this->helperFactory->createStringHelper();
 
-        return new WorksheetManager($styleManager, $styleMerger, $stringsEscaper, $stringsHelper);
+        return new WorksheetManager(
+            $optionsManager,
+            $styleManager,
+            $styleMerger,
+            $stringsEscaper,
+            $stringsHelper
+        );
     }
 
     /**

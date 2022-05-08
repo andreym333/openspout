@@ -37,6 +37,7 @@ class OptionsManager extends OptionsManagerAbstract
             Options::DEFAULT_ROW_STYLE,
             Options::SHOULD_CREATE_NEW_SHEETS_AUTOMATICALLY,
             Options::SHOULD_USE_INLINE_STRINGS,
+            Options::SHOULD_APPLY_EXTRA_STYLES,
             Options::DEFAULT_COLUMN_WIDTH,
             Options::DEFAULT_ROW_HEIGHT,
             Options::COLUMN_WIDTHS,
@@ -59,6 +60,7 @@ class OptionsManager extends OptionsManagerAbstract
         $this->setOption(Options::DEFAULT_ROW_STYLE, $defaultRowStyle);
         $this->setOption(Options::SHOULD_CREATE_NEW_SHEETS_AUTOMATICALLY, true);
         $this->setOption(Options::SHOULD_USE_INLINE_STRINGS, true);
+        $this->setOption(Options::SHOULD_APPLY_EXTRA_STYLES, true);
         $this->setOption(Options::MERGE_CELLS, []);
     }
 }

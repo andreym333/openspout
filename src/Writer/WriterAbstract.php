@@ -58,6 +58,25 @@ abstract class WriterAbstract implements WriterInterface
     }
 
     /**
+     * Sets whether extra styles should be automatically applied.
+     * This must be set before opening the writer.
+     *
+     * @param bool $shouldApplyExtraStyles
+     *
+     * @throws \OpenSpout\Writer\Exception\WriterAlreadyOpenedException If the writer was already opened
+     *
+     * @return Writer
+     */
+    public function setShouldApplyExtraStyles(bool $shouldApplyExtraStyles)
+    {
+        $this->throwIfWriterAlreadyOpened('Writer must be configured before opening it.');
+
+        $this->optionsManager->setOption(Options::SHOULD_APPLY_EXTRA_STYLES, $shouldApplyExtraStyles);
+
+        return $this;
+    }
+
+    /**
      * {@inheritdoc}
      */
     public function openToFile($outputFilePath)

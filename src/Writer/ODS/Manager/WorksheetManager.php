@@ -9,8 +9,9 @@ use OpenSpout\Common\Exception\InvalidArgumentException;
 use OpenSpout\Common\Exception\IOException;
 use OpenSpout\Common\Helper\Escaper\ODS as ODSEscaper;
 use OpenSpout\Common\Helper\StringHelper;
+use OpenSpout\Common\Manager\OptionsManagerInterface;
+use OpenSpout\Writer\Common\Entity\Options;
 use OpenSpout\Writer\Common\Entity\Worksheet;
-use OpenSpout\Writer\Common\Manager\RegisteredStyle;
 use OpenSpout\Writer\Common\Manager\Style\StyleMerger;
 use OpenSpout\Writer\Common\Manager\WorksheetManagerInterface;
 use OpenSpout\Writer\ODS\Manager\Style\StyleManager;
@@ -20,6 +21,9 @@ use OpenSpout\Writer\ODS\Manager\Style\StyleManager;
  */
 class WorksheetManager implements WorksheetManagerInterface
 {
+    /** @var bool */
+    protected $shouldApplyExtraStyles;
+
     /** @var \OpenSpout\Common\Helper\Escaper\ODS Strings escaper */
     private $stringsEscaper;
 
@@ -32,15 +36,20 @@ class WorksheetManager implements WorksheetManagerInterface
     /** @var StyleMerger Helper to merge styles together */
     private $styleMerger;
 
+    /** @var array */
+    private $registeredStyles = [];
+
     /**
      * WorksheetManager constructor.
      */
     public function __construct(
+        OptionsManagerInterface $optionsManager,
         StyleManager $styleManager,
         StyleMerger $styleMerger,
         ODSEscaper $stringsEscaper,
         StringHelper $stringHelper
     ) {
+        $this->shouldApplyExtraStyles = $optionsManager->getOption(Options::SHOULD_APPLY_EXTRA_STYLES);
         $this->styleManager = $styleManager;
         $this->styleMerger = $styleMerger;
         $this->stringsEscaper = $stringsEscaper;
@@ -97,21 +106,102 @@ class WorksheetManager implements WorksheetManagerInterface
 
         $currentCellIndex = 0;
         $nextCellIndex = 1;
+        $numCells = $row->getNumCells();
+        $rowValues = $row->toArray();
 
-        for ($i = 0; $i < $row->getNumCells(); ++$i) {
+        for ($i = 0; $i < $numCells; ++$i) {
             /** @var Cell $cell */
             $cell = $cells[$currentCellIndex];
-            /** @var null|Cell $nextCell */
-            $nextCell = $cells[$nextCellIndex] ?? null;
+            $cellValue = $rowValues[$currentCellIndex] ?? null;
+            $nextCellValue = $rowValues[$nextCellIndex] ?? null;
 
-            if (null === $nextCell || $cell->getValue() !== $nextCell->getValue()) {
-                $registeredStyle = $this->applyStyleAndRegister($cell, $rowStyle);
-                $cellStyle = $registeredStyle->getStyle();
-                if ($registeredStyle->isMatchingRowStyle()) {
+            if ($nextCellIndex == $numCells || $cellValue !== $nextCellValue) {
+
+                // Merging the cell style with its row style, applying and register it
+
+                $isMatchingRowStyle = false;
+                $cellStyle = $cell->getStyle();
+
+                $mergedCellAndRowStyle = $this->styleMerger->merge($cellStyle, $rowStyle);
+                $cell->setStyle($mergedCellAndRowStyle);
+
+                $possiblyUpdatedStyle = $this->shouldApplyExtraStyles
+                    ? $this->styleManager->applyExtraStylesIfNeeded($cell)
+                    : null;
+
+                if ($possiblyUpdatedStyle && $possiblyUpdatedStyle->isUpdated()) {
+                    $newCellStyle = $possiblyUpdatedStyle->getStyle();
+                } else {
+                    $newCellStyle = $mergedCellAndRowStyle;
+                    $isMatchingRowStyle = $cellStyle->isEmpty();
+                }
+
+                $serializedStyle = $newCellStyle->serialize();
+                if (!isset($this->registeredStyles[$serializedStyle])) {
+                    $this->registeredStyles[$serializedStyle] = $this->styleManager->registerStyle($newCellStyle);
+                }
+
+                $cellStyle = $this->registeredStyles[$serializedStyle];
+                if ($isMatchingRowStyle) {
                     $rowStyle = $cellStyle; // Replace actual rowStyle (possibly with null id) by registered style (with id)
                 }
 
-                $data .= $this->getCellXMLWithStyle($cell, $cellStyle, $currentCellIndex, $nextCellIndex);
+                // Generate the cell XML content
+
+                $data .= '<table:table-cell table:style-name="ce'.($cellStyle->getId() + 1).'"';
+
+                $numTimesValueRepeated = $nextCellIndex - $currentCellIndex;
+                if (1 !== $numTimesValueRepeated) {
+                    $data .= ' table:number-columns-repeated="'.$numTimesValueRepeated.'"';
+                }
+
+                if ($cell->isString()) {
+                    $data .= ' office:value-type="string" calcext:value-type="string">';
+
+                    $cellValueLines = explode("\n", $cellValue);
+                    foreach ($cellValueLines as $cellValueLine) {
+                        $data .= '<text:p>'.$this->stringsEscaper->escape($cellValueLine).'</text:p>';
+                    }
+
+                    $data .= '</table:table-cell>';
+                } elseif ($cell->isBoolean()) {
+                    $value = $cellValue ? 'true' : 'false'; // boolean-value spec: http://docs.oasis-open.org/office/v1.2/os/OpenDocument-v1.2-os-part1.html#datatype-boolean
+                    $data .= ' office:value-type="boolean" calcext:value-type="boolean" office:boolean-value="'.$value.'">';
+                    $data .= '<text:p>'.$cellValue.'</text:p>';
+                    $data .= '</table:table-cell>';
+                } elseif ($cell->isNumeric()) {
+                    $cellValue = $this->stringHelper->formatNumericValue($cellValue);
+                    $data .= ' office:value-type="float" calcext:value-type="float" office:value="'.$cellValue.'">';
+                    $data .= '<text:p>'.$cellValue.'</text:p>';
+                    $data .= '</table:table-cell>';
+                } elseif ($cell->isDate()) {
+                    $value = $cellValue;
+                    if ($value instanceof \DateTimeInterface) {
+                        $datevalue = substr((new \DateTimeImmutable('@'.$value->getTimestamp()))->format(\DateTimeInterface::W3C), 0, -6);
+                        $data .= ' office:value-type="date" calcext:value-type="date" office:date-value="'.$datevalue.'Z">';
+                        $data .= '<text:p>'.$datevalue.'Z</text:p>';
+                    } elseif ($value instanceof \DateInterval) {
+                        // workaround for missing DateInterval::format('c'), see https://stackoverflow.com/a/61088115/53538
+                        static $f = ['M0S', 'H0M', 'DT0H', 'M0D', 'Y0M', 'P0Y', 'Y0M', 'P0M'];
+                        static $r = ['M', 'H', 'DT', 'M', 'Y0M', 'P', 'Y', 'P'];
+                        $value = rtrim(str_replace($f, $r, $value->format('P%yY%mM%dDT%hH%iM%sS')), 'PT') ?: 'PT0S';
+                        $data .= ' office:value-type="time" office:time-value="'.$value.'">';
+                        $data .= '<text:p>'.$value.'</text:p>';
+                    } else {
+                        throw new InvalidArgumentException('Trying to add a date value with an unsupported type: '.\gettype($cellValue));
+                    }
+                    $data .= '</table:table-cell>';
+                } elseif ($cell->isError() && \is_string($cell->getValueEvenIfError())) {
+                    // only writes the error value if it's a string
+                    $data .= ' office:value-type="string" calcext:value-type="error" office:value="">';
+                    $data .= '<text:p>'.$cell->getValueEvenIfError().'</text:p>';
+                    $data .= '</table:table-cell>';
+                } elseif ($cell->isEmpty()) {
+                    $data .= '/>';
+                } else {
+                    throw new InvalidArgumentException('Trying to add a value with an unsupported type: '.\gettype($cellValue));
+                }
+
                 $currentCellIndex = $nextCellIndex;
             }
 
@@ -190,119 +280,5 @@ class WorksheetManager implements WorksheetManagerInterface
         if (!$sheetFilePointer) {
             throw new IOException('Unable to open sheet for writing.');
         }
-    }
-
-    /**
-     * Applies styles to the given style, merging the cell's style with its row's style.
-     *
-     * @throws InvalidArgumentException If a cell value's type is not supported
-     */
-    private function applyStyleAndRegister(Cell $cell, Style $rowStyle): RegisteredStyle
-    {
-        $isMatchingRowStyle = false;
-        if ($cell->getStyle()->isEmpty()) {
-            $cell->setStyle($rowStyle);
-
-            $possiblyUpdatedStyle = $this->styleManager->applyExtraStylesIfNeeded($cell);
-
-            if ($possiblyUpdatedStyle->isUpdated()) {
-                $registeredStyle = $this->styleManager->registerStyle($possiblyUpdatedStyle->getStyle());
-            } else {
-                $registeredStyle = $this->styleManager->registerStyle($rowStyle);
-                $isMatchingRowStyle = true;
-            }
-        } else {
-            $mergedCellAndRowStyle = $this->styleMerger->merge($cell->getStyle(), $rowStyle);
-            $cell->setStyle($mergedCellAndRowStyle);
-
-            $possiblyUpdatedStyle = $this->styleManager->applyExtraStylesIfNeeded($cell);
-            if ($possiblyUpdatedStyle->isUpdated()) {
-                $newCellStyle = $possiblyUpdatedStyle->getStyle();
-            } else {
-                $newCellStyle = $mergedCellAndRowStyle;
-            }
-
-            $registeredStyle = $this->styleManager->registerStyle($newCellStyle);
-        }
-
-        return new RegisteredStyle($registeredStyle, $isMatchingRowStyle);
-    }
-
-    private function getCellXMLWithStyle(Cell $cell, Style $style, int $currentCellIndex, int $nextCellIndex): string
-    {
-        $styleIndex = $style->getId() + 1; // 1-based
-
-        $numTimesValueRepeated = ($nextCellIndex - $currentCellIndex);
-
-        return $this->getCellXML($cell, $styleIndex, $numTimesValueRepeated);
-    }
-
-    /**
-     * Returns the cell XML content, given its value.
-     *
-     * @param Cell $cell                  The cell to be written
-     * @param int  $styleIndex            Index of the used style
-     * @param int  $numTimesValueRepeated Number of times the value is consecutively repeated
-     *
-     * @throws InvalidArgumentException If a cell value's type is not supported
-     *
-     * @return string The cell XML content
-     */
-    private function getCellXML(Cell $cell, $styleIndex, $numTimesValueRepeated)
-    {
-        $data = '<table:table-cell table:style-name="ce'.$styleIndex.'"';
-
-        if (1 !== $numTimesValueRepeated) {
-            $data .= ' table:number-columns-repeated="'.$numTimesValueRepeated.'"';
-        }
-
-        if ($cell->isString()) {
-            $data .= ' office:value-type="string" calcext:value-type="string">';
-
-            $cellValueLines = explode("\n", $cell->getValue());
-            foreach ($cellValueLines as $cellValueLine) {
-                $data .= '<text:p>'.$this->stringsEscaper->escape($cellValueLine).'</text:p>';
-            }
-
-            $data .= '</table:table-cell>';
-        } elseif ($cell->isBoolean()) {
-            $value = $cell->getValue() ? 'true' : 'false'; // boolean-value spec: http://docs.oasis-open.org/office/v1.2/os/OpenDocument-v1.2-os-part1.html#datatype-boolean
-            $data .= ' office:value-type="boolean" calcext:value-type="boolean" office:boolean-value="'.$value.'">';
-            $data .= '<text:p>'.$cell->getValue().'</text:p>';
-            $data .= '</table:table-cell>';
-        } elseif ($cell->isNumeric()) {
-            $cellValue = $this->stringHelper->formatNumericValue($cell->getValue());
-            $data .= ' office:value-type="float" calcext:value-type="float" office:value="'.$cellValue.'">';
-            $data .= '<text:p>'.$cellValue.'</text:p>';
-            $data .= '</table:table-cell>';
-        } elseif ($cell->isDate()) {
-            $value = $cell->getValue();
-            if ($value instanceof \DateTimeInterface) {
-                $datevalue = substr((new \DateTimeImmutable('@'.$value->getTimestamp()))->format(\DateTimeInterface::W3C), 0, -6);
-                $data .= ' office:value-type="date" calcext:value-type="date" office:date-value="'.$datevalue.'Z">';
-                $data .= '<text:p>'.$datevalue.'Z</text:p>';
-            } elseif ($value instanceof \DateInterval) {
-                // workaround for missing DateInterval::format('c'), see https://stackoverflow.com/a/61088115/53538
-                static $f = ['M0S', 'H0M', 'DT0H', 'M0D', 'Y0M', 'P0Y', 'Y0M', 'P0M'];
-                static $r = ['M', 'H', 'DT', 'M', 'Y0M', 'P', 'Y', 'P'];
-                $value = rtrim(str_replace($f, $r, $value->format('P%yY%mM%dDT%hH%iM%sS')), 'PT') ?: 'PT0S';
-                $data .= ' office:value-type="time" office:time-value="'.$value.'">';
-                $data .= '<text:p>'.$value.'</text:p>';
-            } else {
-                throw new InvalidArgumentException('Trying to add a date value with an unsupported type: '.\gettype($cell->getValue()));
-            }
-            $data .= '</table:table-cell>';
-        } elseif ($cell->isError() && \is_string($cell->getValueEvenIfError())) {
-            // only writes the error value if it's a string
-            $data .= ' office:value-type="string" calcext:value-type="error" office:value="">';
-            $data .= '<text:p>'.$cell->getValueEvenIfError().'</text:p>';
-            $data .= '</table:table-cell>';
-        } elseif ($cell->isEmpty()) {
-            $data .= '/>';
-        } else {
-            throw new InvalidArgumentException('Trying to add a value with an unsupported type: '.\gettype($cell->getValue()));
-        }
-
-        return $data;
     }
 }

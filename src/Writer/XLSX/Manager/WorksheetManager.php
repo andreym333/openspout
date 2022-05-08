@@ -14,7 +14,6 @@ use OpenSpout\Writer\Common\Entity\Options;
 use OpenSpout\Writer\Common\Entity\Worksheet;
 use OpenSpout\Writer\Common\Helper\CellHelper;
 use OpenSpout\Writer\Common\Manager\ManagesCellSize;
-use OpenSpout\Writer\Common\Manager\RegisteredStyle;
 use OpenSpout\Writer\Common\Manager\RowManager;
 use OpenSpout\Writer\Common\Manager\Style\StyleMerger;
 use OpenSpout\Writer\Common\Manager\WorksheetManagerInterface;
@@ -45,6 +44,9 @@ class WorksheetManager implements WorksheetManagerInterface
     /** @var bool Whether inline or shared strings should be used */
     protected $shouldUseInlineStrings;
 
+    /** @var bool */
+    protected $shouldApplyExtraStyles;
+
     /** @var OptionsManagerInterface */
     private $optionsManager;
 
@@ -66,6 +68,12 @@ class WorksheetManager implements WorksheetManagerInterface
     /** @var StringHelper String helper */
     private $stringHelper;
 
+    /** @var array */
+    private $columnLetters = [];
+
+    /** @var array */
+    private $registeredStyles = [];
+
     /**
      * WorksheetManager constructor.
      */
@@ -80,6 +88,7 @@ class WorksheetManager implements WorksheetManagerInterface
     ) {
         $this->optionsManager = $optionsManager;
         $this->shouldUseInlineStrings = $optionsManager->getOption(Options::SHOULD_USE_INLINE_STRINGS);
+        $this->shouldApplyExtraStyles = $optionsManager->getOption(Options::SHOULD_APPLY_EXTRA_STYLES);
         $this->setDefaultColumnWidth($optionsManager->getOption(Options::DEFAULT_COLUMN_WIDTH));
         $this->setDefaultRowHeight($optionsManager->getOption(Options::DEFAULT_ROW_HEIGHT));
         $this->columnWidths = $optionsManager->getOption(Options::COLUMN_WIDTHS) ?? [];
@@ -246,12 +255,86 @@ class WorksheetManager implements WorksheetManagerInterface
         $rowXML = "<row r=\"{$rowIndexOneBased}\" spans=\"1:{$numCells}\" customHeight=\"{$hasCustomHeight}\">";
 
         foreach ($row->getCells() as $columnIndexZeroBased => $cell) {
-            $registeredStyle = $this->applyStyleAndRegister($cell, $rowStyle);
-            $cellStyle = $registeredStyle->getStyle();
-            if ($registeredStyle->isMatchingRowStyle()) {
+
+            // Merging the cell style with its row style, applying and register it
+
+            $isMatchingRowStyle = false;
+            $cellStyle = $cell->getStyle();
+
+            $mergedCellAndRowStyle = $this->styleMerger->merge($cellStyle, $rowStyle);
+            $cell->setStyle($mergedCellAndRowStyle);
+
+            $possiblyUpdatedStyle = $this->shouldApplyExtraStyles
+                ? $this->styleManager->applyExtraStylesIfNeeded($cell)
+                : null;
+
+            if ($possiblyUpdatedStyle && $possiblyUpdatedStyle->isUpdated()) {
+                $newCellStyle = $possiblyUpdatedStyle->getStyle();
+            } else {
+                $newCellStyle = $mergedCellAndRowStyle;
+                $isMatchingRowStyle = $cellStyle->isEmpty();
+            }
+
+            $serializedStyle = $newCellStyle->serialize();
+            if (!isset($this->registeredStyles[$serializedStyle])) {
+                $this->registeredStyles[$serializedStyle] = $this->styleManager->registerStyle($newCellStyle);
+            }
+
+            $cellStyle = $this->registeredStyles[$serializedStyle];
+            if ($isMatchingRowStyle) {
                 $rowStyle = $cellStyle; // Replace actual rowStyle (possibly with null id) by registered style (with id)
             }
-            $rowXML .= $this->getCellXML($rowIndexOneBased, $columnIndexZeroBased, $cell, $cellStyle->getId());
+
+            // Generate the cell XML content
+
+            if (!isset($this->columnLetters[$columnIndexZeroBased])) {
+                $this->columnLetters[$columnIndexZeroBased] = CellHelper::getColumnLettersFromColumnIndex($columnIndexZeroBased);
+            }
+            $columnLetters = $this->columnLetters[$columnIndexZeroBased];
+            $cellXML = '<c r="'.$columnLetters.$rowIndexOneBased.'"';
+            $cellXML .= ' s="'.$cellStyle->getId().'"';
+
+            if ($cell->isString()) {
+                $value = $cell->getValue();
+                if (\strlen($value) > self::MAX_CHARACTERS_PER_CELL && $this->stringHelper->getStringLength($value) > self::MAX_CHARACTERS_PER_CELL) {
+                    throw new InvalidArgumentException('Trying to add a value that exceeds the maximum number of characters allowed in a cell (32,767)');
+                }
+
+                if ($this->shouldUseInlineStrings) {
+                    $cellXML .= ' t="inlineStr"><is><t>'.$this->stringsEscaper->escape($value).'</t></is></c>';
+                } else {
+                    $sharedStringId = $this->sharedStringsManager->writeString($value);
+                    $cellXML .= ' t="s"><v>'.$sharedStringId.'</v></c>';
+                }
+            } elseif ($cell->isBoolean()) {
+                $cellXML .= ' t="b"><v>'.(int) ($cell->getValue()).'</v></c>';
+            } elseif ($cell->isNumeric()) {
+                $cellXML .= '><v>'.$this->stringHelper->formatNumericValue($cell->getValue()).'</v></c>';
+            } elseif ($cell->isFormula()) {
+                $cellXML .= '><f>'.substr($cell->getValue(), 1).'</f></c>';
+            } elseif ($cell->isDate()) {
+                $value = $cell->getValue();
+                if ($value instanceof \DateTimeInterface) {
+                    $cellXML .= '><v>'.(string) DateHelper::toExcel($value).'</v></c>';
+                } else {
+                    throw new InvalidArgumentException('Trying to add a date value with an unsupported type: '.\gettype($value));
+                }
+            } elseif ($cell->isError() && \is_string($cell->getValueEvenIfError())) {
+                // only writes the error value if it's a string
+                $cellXML .= ' t="e"><v>'.$cell->getValueEvenIfError().'</v></c>';
+            } elseif ($cell->isEmpty()) {
+                if ($this->styleManager->shouldApplyStyleOnEmptyCell($styleId)) {
+                    $cellXML .= '/>';
+                } else {
+                    // don't write empty cells that do no need styling
+                    // NOTE: not appending to $cellXML is the right behavior!!
+                    $cellXML = '';
+                }
+            } else {
+                throw new InvalidArgumentException('Trying to add a value with an unsupported type: '.\gettype($cell->getValue()));
+            }
+
+            $rowXML .= $cellXML;
         }
 
         $rowXML .= '</row>';
@@ -260,117 +343,5 @@ class WorksheetManager implements WorksheetManagerInterface
         if (false === $wasWriteSuccessful) {
             throw new IOException("Unable to write data in {$worksheet->getFilePath()}");
         }
-    }
-
-    /**
-     * Applies styles to the given style, merging the cell's style with its row's style.
-     *
-     * @throws InvalidArgumentException If the given value cannot be processed
-     */
-    private function applyStyleAndRegister(Cell $cell, Style $rowStyle): RegisteredStyle
-    {
-        $isMatchingRowStyle = false;
-        if ($cell->getStyle()->isEmpty()) {
-            $cell->setStyle($rowStyle);
-
-            $possiblyUpdatedStyle = $this->styleManager->applyExtraStylesIfNeeded($cell);
-
-            if ($possiblyUpdatedStyle->isUpdated()) {
-                $registeredStyle = $this->styleManager->registerStyle($possiblyUpdatedStyle->getStyle());
-            } else {
-                $registeredStyle = $this->styleManager->registerStyle($rowStyle);
-                $isMatchingRowStyle = true;
-            }
-        } else {
-            $mergedCellAndRowStyle = $this->styleMerger->merge($cell->getStyle(), $rowStyle);
-            $cell->setStyle($mergedCellAndRowStyle);
-
-            $possiblyUpdatedStyle = $this->styleManager->applyExtraStylesIfNeeded($cell);
-
-            if ($possiblyUpdatedStyle->isUpdated()) {
-                $newCellStyle = $possiblyUpdatedStyle->getStyle();
-            } else {
-                $newCellStyle = $mergedCellAndRowStyle;
-            }
-
-            $registeredStyle = $this->styleManager->registerStyle($newCellStyle);
-        }
-
-        return new RegisteredStyle($registeredStyle, $isMatchingRowStyle);
-    }
-
-    /**
-     * Builds and returns xml for a single cell.
-     *
-     * @param int $rowIndexOneBased
-     * @param int $columnIndexZeroBased
-     * @param int $styleId
-     *
-     * @throws InvalidArgumentException If the given value cannot be processed
-     *
-     * @return string
-     */
-    private function getCellXML($rowIndexOneBased, $columnIndexZeroBased, Cell $cell, $styleId)
-    {
-        $columnLetters = CellHelper::getColumnLettersFromColumnIndex($columnIndexZeroBased);
-        $cellXML = '<c r="'.$columnLetters.$rowIndexOneBased.'"';
-        $cellXML .= ' s="'.$styleId.'"';
-
-        if ($cell->isString()) {
-            $cellXML .= $this->getCellXMLFragmentForNonEmptyString($cell->getValue());
-        } elseif ($cell->isBoolean()) {
-            $cellXML .= ' t="b"><v>'.(int) ($cell->getValue()).'</v></c>';
-        } elseif ($cell->isNumeric()) {
-            $cellXML .= '><v>'.$this->stringHelper->formatNumericValue($cell->getValue()).'</v></c>';
-        } elseif ($cell->isFormula()) {
-            $cellXML .= '><f>'.substr($cell->getValue(), 1).'</f></c>';
-        } elseif ($cell->isDate()) {
-            $value = $cell->getValue();
-            if ($value instanceof \DateTimeInterface) {
-                $cellXML .= '><v>'.(string) DateHelper::toExcel($value).'</v></c>';
-            } else {
-                throw new InvalidArgumentException('Trying to add a date value with an unsupported type: '.\gettype($value));
-            }
-        } elseif ($cell->isError() && \is_string($cell->getValueEvenIfError())) {
-            // only writes the error value if it's a string
-            $cellXML .= ' t="e"><v>'.$cell->getValueEvenIfError().'</v></c>';
-        } elseif ($cell->isEmpty()) {
-            if ($this->styleManager->shouldApplyStyleOnEmptyCell($styleId)) {
-                $cellXML .= '/>';
-            } else {
-                // don't write empty cells that do no need styling
-                // NOTE: not appending to $cellXML is the right behavior!!
-                $cellXML = '';
-            }
-        } else {
-            throw new InvalidArgumentException('Trying to add a value with an unsupported type: '.\gettype($cell->getValue()));
-        }
-
-        return $cellXML;
-    }
-
-    /**
-     * Returns the XML fragment for a cell containing a non empty string.
-     *
-     * @param string $cellValue The cell value
-     *
-     * @throws InvalidArgumentException If the string exceeds the maximum number of characters allowed per cell
-     *
-     * @return string The XML fragment representing the cell
-     */
-    private function getCellXMLFragmentForNonEmptyString($cellValue)
-    {
-        if ($this->stringHelper->getStringLength($cellValue) > self::MAX_CHARACTERS_PER_CELL) {
-            throw new InvalidArgumentException('Trying to add a value that exceeds the maximum number of characters allowed in a cell (32,767)');
-        }
-
-        if ($this->shouldUseInlineStrings) {
-            $cellXMLFragment = ' t="inlineStr"><is><t>'.$this->stringsEscaper->escape($cellValue).'</t></is></c>';
-        } else {
-            $sharedStringId = $this->sharedStringsManager->writeString($cellValue);
-            $cellXMLFragment = ' t="s"><v>'.$sharedStringId.'</v></c>';
-        }
-
-        return $cellXMLFragment;
     }
 }

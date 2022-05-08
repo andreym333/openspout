@@ -9,6 +9,9 @@ use OpenSpout\Common\Entity\Style\Style;
  */
 class StyleMerger
 {
+    /** @var array */
+    protected $mergedStyles = [];
+
     /**
      * Merges the current style with the given style, using the given style as a base. This means that:
      *   - if current style and base style both have property A set, use current style property's value
@@ -21,13 +24,20 @@ class StyleMerger
      */
     public function merge(Style $style, Style $baseStyle)
     {
-        $mergedStyle = clone $style;
+        $serializedBaseStyle = $baseStyle->serialize();
+        $serializedStyle = $style->serialize();
 
-        $this->mergeFontStyles($mergedStyle, $style, $baseStyle);
-        $this->mergeOtherFontProperties($mergedStyle, $style, $baseStyle);
-        $this->mergeCellProperties($mergedStyle, $style, $baseStyle);
+        if (!isset($this->mergedStyles[$serializedBaseStyle][$serializedStyle])) {
+            $mergedStyle = clone $style;
 
-        return $mergedStyle;
+            $this->mergeFontStyles($mergedStyle, $style, $baseStyle);
+            $this->mergeOtherFontProperties($mergedStyle, $style, $baseStyle);
+            $this->mergeCellProperties($mergedStyle, $style, $baseStyle);
+
+            $this->mergedStyles[$serializedBaseStyle][$serializedStyle] = $mergedStyle;
+        }
+
+        return $this->mergedStyles[$serializedBaseStyle][$serializedStyle];
     }
 
     /**
