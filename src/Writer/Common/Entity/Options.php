@@ -20,12 +20,11 @@ abstract class Options
 
     // XLSX specific options
     public const SHOULD_USE_INLINE_STRINGS = 'shouldUseInlineStrings';
+    public const MERGE_CELLS = 'mergeCells';
+    public const SHOW_ROW_OUTLINE_SUMMARY_BELOW = 'showRowOutlineSummaryBelow';
 
     // Cell size options
     public const DEFAULT_COLUMN_WIDTH = 'defaultColumnWidth';
     public const DEFAULT_ROW_HEIGHT = 'defaultRowHeight';
     public const COLUMN_WIDTHS = 'columnWidthDefinition';
-
-    // XLSX merge cells
-    public const MERGE_CELLS = 'mergeCells';
 }

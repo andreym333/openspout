@@ -69,4 +69,18 @@ class Writer extends WriterMultiSheetsAbstract
 
         return $this;
     }
+
+    /**
+     * Set show summary below (row outline).
+     *
+     * @param bool $showRowOutlineSummaryBelow
+     *
+     * @return Writer
+     */
+    public function setShowRowOutlineSummaryBelow(bool $showRowOutlineSummaryBelow)
+    {
+        $this->optionsManager->setOption(Options::SHOW_ROW_OUTLINE_SUMMARY_BELOW, $showRowOutlineSummaryBelow);
+
+        return $this;
+    }
 }

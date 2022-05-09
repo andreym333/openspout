@@ -42,6 +42,7 @@ class OptionsManager extends OptionsManagerAbstract
             Options::DEFAULT_ROW_HEIGHT,
             Options::COLUMN_WIDTHS,
             Options::MERGE_CELLS,
+            Options::SHOW_ROW_OUTLINE_SUMMARY_BELOW,
         ];
     }
 
@@ -62,5 +63,6 @@ class OptionsManager extends OptionsManagerAbstract
         $this->setOption(Options::SHOULD_USE_INLINE_STRINGS, true);
         $this->setOption(Options::SHOULD_APPLY_EXTRA_STYLES, true);
         $this->setOption(Options::MERGE_CELLS, []);
+        $this->setOption(Options::SHOW_ROW_OUTLINE_SUMMARY_BELOW, true);
     }
 }

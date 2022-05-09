@@ -3,6 +3,7 @@
 namespace OpenSpout\Common\Entity;
 
 use OpenSpout\Common\Entity\Style\Style;
+use OpenSpout\Common\Exception\InvalidArgumentException;
 
 class Row
 {
@@ -26,6 +27,13 @@ class Row
      * @var string
      */
     protected $height = '15';
+
+    /**
+     * Outline level.
+     *
+     * @var int
+     */
+    protected $outlineLevel = 0;
 
     /**
      * Row constructor.
@@ -164,5 +172,33 @@ class Row
     public function getHeight()
     {
         return $this->height;
+    }
+
+    /**
+     * Get Outline Level.
+     *
+     * @return int
+     */
+    public function getOutlineLevel(): int
+    {
+        return $this->outlineLevel;
+    }
+
+    /**
+     * Set Outline Level.
+     *
+     * @throws InvalidArgumentException If the value is not between 0 and 7
+     *
+     * @return Row
+     */
+    public function setOutlineLevel(int $level)
+    {
+        if ($level < 0 || $level > 7) {
+            throw new InvalidArgumentException('Outline level must range between 0 and 7.');
+        }
+
+        $this->outlineLevel = $level;
+
+        return $this;
     }
 }

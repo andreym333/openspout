@@ -77,6 +77,15 @@ class WorksheetManager implements WorksheetManagerInterface
     /** @var array */
     private $shouldApplyStyleOnEmptyCellCache = [];
 
+    /** @var int */
+    private $sheetOutlineLevelRow = 0;
+
+    /** @var int */
+    private $sheetOutlineLevelRowFileOffset;
+
+    /** @var bool */
+    private $showRowOutlineSummaryBelow;
+
     /**
      * WorksheetManager constructor.
      */
@@ -95,6 +104,7 @@ class WorksheetManager implements WorksheetManagerInterface
         $this->setDefaultColumnWidth($optionsManager->getOption(Options::DEFAULT_COLUMN_WIDTH));
         $this->setDefaultRowHeight($optionsManager->getOption(Options::DEFAULT_ROW_HEIGHT));
         $this->columnWidths = $optionsManager->getOption(Options::COLUMN_WIDTHS) ?? [];
+        $this->showRowOutlineSummaryBelow = $optionsManager->getOption(Options::SHOW_ROW_OUTLINE_SUMMARY_BELOW);
         $this->rowManager = $rowManager;
         $this->styleManager = $styleManager;
         $this->styleMerger = $styleMerger;
@@ -129,7 +139,7 @@ class WorksheetManager implements WorksheetManagerInterface
      */
     public function addRow(Worksheet $worksheet, Row $row)
     {
-        if (!$this->rowManager->isEmpty($row)) {
+        if (!$this->rowManager->isEmpty($row) || $row->getOutlineLevel() > 0) {
             $this->addNonEmptyRow($worksheet, $row);
         }
 
@@ -137,40 +147,97 @@ class WorksheetManager implements WorksheetManagerInterface
     }
 
     /**
-     * Construct column width references xml to inject into worksheet xml file.
-     *
-     * @return string
+     * Write SheetPr.
      */
-    public function getXMLFragmentForColumnWidths()
+    private function writeSheetPr(Worksheet $worksheet)
+    {
+        $xml = '<sheetPr><outlinePr summaryBelow="'.($this->showRowOutlineSummaryBelow ? '1' : '0').'"/></sheetPr>';
+        fwrite($worksheet->getFilePointer(), $xml);
+    }
+
+    /**
+     * Write SheetViews.
+     */
+    private function writeSheetViews(Worksheet $worksheet)
+    {
+        $sheet = $worksheet->getExternalSheet();
+        if ($sheet->hasSheetView()) {
+            $xml = '<sheetViews>'.$sheet->getSheetView()->getXml().'</sheetViews>';
+            fwrite($worksheet->getFilePointer(), $xml);
+        }
+    }
+
+    /**
+     * Write SheetFormatPr.
+     */
+    private function writeSheetFormatPr(Worksheet $worksheet)
+    {
+        $worksheetFilePointer = $worksheet->getFilePointer();
+
+        $rowHeightXml = empty($this->defaultRowHeight)
+            ? ' defaultRowHeight="0"'
+            : " defaultRowHeight=\"{$this->defaultRowHeight}\"";
+        $colWidthXml = empty($this->defaultColumnWidth)
+            ? ''
+            : " defaultColWidth=\"{$this->defaultColumnWidth}\"";
+
+        $xml = "<sheetFormatPr{$colWidthXml}{$rowHeightXml} outlineLevelRow=\"0\"/>";
+
+        $this->sheetOutlineLevelRowFileOffset = ftell($worksheetFilePointer) +
+            strpos($xml, ' outlineLevelRow="') + 18;
+
+        fwrite($worksheetFilePointer, $xml);
+    }
+
+    /**
+     * Write Cols.
+     */
+    private function writeCols(Worksheet $worksheet)
     {
         if (empty($this->columnWidths)) {
-            return '';
+            return;
         }
+
         $xml = '<cols>';
         foreach ($this->columnWidths as $entry) {
             $xml .= '<col min="'.$entry[0].'" max="'.$entry[1].'" width="'.$entry[2].'" customWidth="true"/>';
         }
         $xml .= '</cols>';
 
-        return $xml;
+        fwrite($worksheet->getFilePointer(), $xml);
     }
 
     /**
-     * Constructs default row height and width xml to inject into worksheet xml file.
-     *
-     * @return string
+     * Write MergeCells.
      */
-    public function getXMLFragmentForDefaultCellSizing()
+    private function writeMergeCells(Worksheet $worksheet)
     {
-        $rowHeightXml = empty($this->defaultRowHeight) ? '' : " defaultRowHeight=\"{$this->defaultRowHeight}\"";
-        $colWidthXml = empty($this->defaultColumnWidth) ? '' : " defaultColWidth=\"{$this->defaultColumnWidth}\"";
-        if (empty($colWidthXml) && empty($rowHeightXml)) {
-            return '';
+        $mergeCells = $this->optionsManager->getOption(Options::MERGE_CELLS);
+        if ($mergeCells) {
+            $xml = '<mergeCells count="'.\count($mergeCells).'">';
+            foreach ($mergeCells as $values) {
+                $output = array_map(function ($value) {
+                    return CellHelper::getColumnLettersFromColumnIndex($value[0]).$value[1];
+                }, $values);
+                $xml .= '<mergeCell ref="'.implode(':', $output).'"/>';
+            }
+            $xml .= '</mergeCells>';
+            fwrite($worksheet->getFilePointer(), $xml);
         }
-        // Ensure that the required defaultRowHeight is set
-        $rowHeightXml = empty($rowHeightXml) ? ' defaultRowHeight="0"' : $rowHeightXml;
+    }
 
-        return "<sheetFormatPr{$colWidthXml}{$rowHeightXml}/>";
+    /**
+     * Update the outlineLevel attribute in the sheetFormatPr element.
+     */
+    private function updateSheetOutlineLevelRow(Worksheet $worksheet, int $newOutlineLevel)
+    {
+        $this->sheetOutlineLevelRow = $newOutlineLevel;
+
+        $worksheetFilePointer = $worksheet->getFilePointer();
+        $oldFileOffset = ftell($worksheetFilePointer);
+        fseek($worksheetFilePointer, $this->sheetOutlineLevelRowFileOffset);
+        fwrite($worksheetFilePointer, $newOutlineLevel, 1);
+        fseek($worksheetFilePointer, $oldFileOffset);
     }
 
     /**
@@ -186,18 +253,7 @@ class WorksheetManager implements WorksheetManagerInterface
         $this->ensureSheetDataStated($worksheet);
         fwrite($worksheetFilePointer, '</sheetData>');
 
-        // create nodes for merge cells
-        if ($this->optionsManager->getOption(Options::MERGE_CELLS)) {
-            $mergeCellString = '<mergeCells count="'.\count($this->optionsManager->getOption(Options::MERGE_CELLS)).'">';
-            foreach ($this->optionsManager->getOption(Options::MERGE_CELLS) as $values) {
-                $output = array_map(function ($value) {
-                    return CellHelper::getColumnLettersFromColumnIndex($value[0]).$value[1];
-                }, $values);
-                $mergeCellString .= '<mergeCell ref="'.implode(':', $output).'"/>';
-            }
-            $mergeCellString .= '</mergeCells>';
-            fwrite($worksheet->getFilePointer(), $mergeCellString);
-        }
+        $this->writeMergeCells($worksheet);
 
         fwrite($worksheetFilePointer, '</worksheet>');
         fclose($worksheetFilePointer);
@@ -211,14 +267,14 @@ class WorksheetManager implements WorksheetManagerInterface
     private function ensureSheetDataStated(Worksheet $worksheet)
     {
         if (!$worksheet->getSheetDataStarted()) {
-            $worksheetFilePointer = $worksheet->getFilePointer();
-            $sheet = $worksheet->getExternalSheet();
-            if ($sheet->hasSheetView()) {
-                fwrite($worksheetFilePointer, '<sheetViews>'.$sheet->getSheetView()->getXml().'</sheetViews>');
-            }
-            fwrite($worksheetFilePointer, $this->getXMLFragmentForDefaultCellSizing());
-            fwrite($worksheetFilePointer, $this->getXMLFragmentForColumnWidths());
-            fwrite($worksheetFilePointer, '<sheetData>');
+            $this->sheetOutlineLevelRow = 0;
+
+            $this->writeSheetPr($worksheet);
+            $this->writeSheetViews($worksheet);
+            $this->writeSheetFormatPr($worksheet);
+            $this->writeCols($worksheet);
+
+            fwrite($worksheet->getFilePointer(), '<sheetData>');
             $worksheet->setSheetDataStarted(true);
         }
     }
@@ -255,7 +311,16 @@ class WorksheetManager implements WorksheetManagerInterface
         $numCells = $row->getNumCells();
 
         $hasCustomHeight = $this->defaultRowHeight > 0 ? '1' : '0';
-        $rowXML = "<row r=\"{$rowIndexOneBased}\" spans=\"1:{$numCells}\" customHeight=\"{$hasCustomHeight}\">";
+        $rowOutlineLevel = $row->getOutlineLevel();
+
+        $rowXML = "<row r=\"{$rowIndexOneBased}\" spans=\"1:{$numCells}\" customHeight=\"{$hasCustomHeight}\"";
+        if ($rowOutlineLevel > 0) {
+          $rowXML .= " outlineLevel=\"{$rowOutlineLevel}\"";
+          if ($rowOutlineLevel > $this->sheetOutlineLevelRow) {
+            $this->updateSheetOutlineLevelRow($worksheet, $rowOutlineLevel);
+          }
+        }
+        $rowXML .= ">";
 
         foreach ($row->getCells() as $columnIndexZeroBased => $cell) {
 
