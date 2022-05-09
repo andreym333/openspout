@@ -39,7 +39,7 @@ class WorksheetManager implements WorksheetManagerInterface
     public const SHEET_XML_FILE_HEADER = <<<'EOD'
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-        EOD;
+EOD;
 
     /** @var bool Whether inline or shared strings should be used */
     protected $shouldUseInlineStrings;
@@ -69,10 +69,13 @@ class WorksheetManager implements WorksheetManagerInterface
     private $stringHelper;
 
     /** @var array */
-    private $columnLetters = [];
+    private $columnLettersCache = [];
 
     /** @var array */
-    private $registeredStyles = [];
+    private $registeredStylesCache = [];
+
+    /** @var array */
+    private $shouldApplyStyleOnEmptyCellCache = [];
 
     /**
      * WorksheetManager constructor.
@@ -276,25 +279,29 @@ class WorksheetManager implements WorksheetManagerInterface
             }
 
             $serializedStyle = $newCellStyle->serialize();
-            if (!isset($this->registeredStyles[$serializedStyle])) {
-                $this->registeredStyles[$serializedStyle] = $this->styleManager->registerStyle($newCellStyle);
+            if (!isset($this->registeredStylesCache[$serializedStyle])) {
+                $this->registeredStylesCache[$serializedStyle] = $this->styleManager->registerStyle($newCellStyle);
             }
 
-            $cellStyle = $this->registeredStyles[$serializedStyle];
+            $cellStyle = $this->registeredStylesCache[$serializedStyle];
             if ($isMatchingRowStyle) {
                 $rowStyle = $cellStyle; // Replace actual rowStyle (possibly with null id) by registered style (with id)
             }
 
             // Generate the cell XML content
 
-            if (!isset($this->columnLetters[$columnIndexZeroBased])) {
-                $this->columnLetters[$columnIndexZeroBased] = CellHelper::getColumnLettersFromColumnIndex($columnIndexZeroBased);
-            }
-            $columnLetters = $this->columnLetters[$columnIndexZeroBased];
-            $cellXML = '<c r="'.$columnLetters.$rowIndexOneBased.'"';
-            $cellXML .= ' s="'.$cellStyle->getId().'"';
+            $cellType = $cell->getType();
+            $styleId = $cellStyle->getId();
 
-            if ($cell->isString()) {
+            if (!isset($this->columnLettersCache[$columnIndexZeroBased])) {
+                $this->columnLettersCache[$columnIndexZeroBased] = CellHelper::getColumnLettersFromColumnIndex($columnIndexZeroBased);
+            }
+            $columnLetters = $this->columnLettersCache[$columnIndexZeroBased];
+
+            $cellXML = '<c r="'.$columnLetters.$rowIndexOneBased.'"';
+            $cellXML .= ' s="'.$styleId.'"';
+
+            if ($cellType === Cell::TYPE_STRING) {
                 $value = $cell->getValue();
                 if (\strlen($value) > self::MAX_CHARACTERS_PER_CELL && $this->stringHelper->getStringLength($value) > self::MAX_CHARACTERS_PER_CELL) {
                     throw new InvalidArgumentException('Trying to add a value that exceeds the maximum number of characters allowed in a cell (32,767)');
@@ -306,24 +313,28 @@ class WorksheetManager implements WorksheetManagerInterface
                     $sharedStringId = $this->sharedStringsManager->writeString($value);
                     $cellXML .= ' t="s"><v>'.$sharedStringId.'</v></c>';
                 }
-            } elseif ($cell->isBoolean()) {
+            } elseif ($cellType === Cell::TYPE_BOOLEAN) {
                 $cellXML .= ' t="b"><v>'.(int) ($cell->getValue()).'</v></c>';
-            } elseif ($cell->isNumeric()) {
+            } elseif ($cellType === Cell::TYPE_NUMERIC) {
                 $cellXML .= '><v>'.$this->stringHelper->formatNumericValue($cell->getValue()).'</v></c>';
-            } elseif ($cell->isFormula()) {
+            } elseif ($cellType === Cell::TYPE_FORMULA) {
                 $cellXML .= '><f>'.substr($cell->getValue(), 1).'</f></c>';
-            } elseif ($cell->isDate()) {
+            } elseif ($cellType === Cell::TYPE_DATE) {
                 $value = $cell->getValue();
                 if ($value instanceof \DateTimeInterface) {
                     $cellXML .= '><v>'.(string) DateHelper::toExcel($value).'</v></c>';
                 } else {
                     throw new InvalidArgumentException('Trying to add a date value with an unsupported type: '.\gettype($value));
                 }
-            } elseif ($cell->isError() && \is_string($cell->getValueEvenIfError())) {
+            } elseif ($cellType === Cell::TYPE_ERROR && \is_string($cell->getValueEvenIfError())) {
                 // only writes the error value if it's a string
                 $cellXML .= ' t="e"><v>'.$cell->getValueEvenIfError().'</v></c>';
-            } elseif ($cell->isEmpty()) {
-                if ($this->styleManager->shouldApplyStyleOnEmptyCell($styleId)) {
+            } elseif ($cellType === Cell::TYPE_EMPTY) {
+                if (!isset($this->shouldApplyStyleOnEmptyCellCache[$styleId])) {
+                    $this->shouldApplyStyleOnEmptyCellCache[$styleId] = $this->styleManager->shouldApplyStyleOnEmptyCell($styleId);
+                }
+
+                if ($this->shouldApplyStyleOnEmptyCellCache[$styleId]) {
                     $cellXML .= '/>';
                 } else {
                     // don't write empty cells that do no need styling

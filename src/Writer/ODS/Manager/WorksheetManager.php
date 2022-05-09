@@ -37,7 +37,7 @@ class WorksheetManager implements WorksheetManagerInterface
     private $styleMerger;
 
     /** @var array */
-    private $registeredStyles = [];
+    private $registeredStylesCache = [];
 
     /**
      * WorksheetManager constructor.
@@ -137,25 +137,28 @@ class WorksheetManager implements WorksheetManagerInterface
                 }
 
                 $serializedStyle = $newCellStyle->serialize();
-                if (!isset($this->registeredStyles[$serializedStyle])) {
-                    $this->registeredStyles[$serializedStyle] = $this->styleManager->registerStyle($newCellStyle);
+                if (!isset($this->registeredStylesCache[$serializedStyle])) {
+                    $this->registeredStylesCache[$serializedStyle] = $this->styleManager->registerStyle($newCellStyle);
                 }
 
-                $cellStyle = $this->registeredStyles[$serializedStyle];
+                $cellStyle = $this->registeredStylesCache[$serializedStyle];
                 if ($isMatchingRowStyle) {
                     $rowStyle = $cellStyle; // Replace actual rowStyle (possibly with null id) by registered style (with id)
                 }
 
                 // Generate the cell XML content
 
-                $data .= '<table:table-cell table:style-name="ce'.($cellStyle->getId() + 1).'"';
+                $cellType = $cell->getType();
+                $styleId = $cellStyle->getId();
+
+                $data .= '<table:table-cell table:style-name="ce'.($styleId + 1).'"';
 
                 $numTimesValueRepeated = $nextCellIndex - $currentCellIndex;
                 if (1 !== $numTimesValueRepeated) {
                     $data .= ' table:number-columns-repeated="'.$numTimesValueRepeated.'"';
                 }
 
-                if ($cell->isString()) {
+                if ($cellType === Cell::TYPE_STRING) {
                     $data .= ' office:value-type="string" calcext:value-type="string">';
 
                     $cellValueLines = explode("\n", $cellValue);
@@ -164,17 +167,17 @@ class WorksheetManager implements WorksheetManagerInterface
                     }
 
                     $data .= '</table:table-cell>';
-                } elseif ($cell->isBoolean()) {
+                } elseif ($cellType === Cell::TYPE_BOOLEAN) {
                     $value = $cellValue ? 'true' : 'false'; // boolean-value spec: http://docs.oasis-open.org/office/v1.2/os/OpenDocument-v1.2-os-part1.html#datatype-boolean
                     $data .= ' office:value-type="boolean" calcext:value-type="boolean" office:boolean-value="'.$value.'">';
                     $data .= '<text:p>'.$cellValue.'</text:p>';
                     $data .= '</table:table-cell>';
-                } elseif ($cell->isNumeric()) {
+                } elseif ($cellType === Cell::TYPE_NUMERIC) {
                     $cellValue = $this->stringHelper->formatNumericValue($cellValue);
                     $data .= ' office:value-type="float" calcext:value-type="float" office:value="'.$cellValue.'">';
                     $data .= '<text:p>'.$cellValue.'</text:p>';
                     $data .= '</table:table-cell>';
-                } elseif ($cell->isDate()) {
+                } elseif ($cellType === Cell::TYPE_DATE) {
                     $value = $cellValue;
                     if ($value instanceof \DateTimeInterface) {
                         $datevalue = substr((new \DateTimeImmutable('@'.$value->getTimestamp()))->format(\DateTimeInterface::W3C), 0, -6);
@@ -191,12 +194,12 @@ class WorksheetManager implements WorksheetManagerInterface
                         throw new InvalidArgumentException('Trying to add a date value with an unsupported type: '.\gettype($cellValue));
                     }
                     $data .= '</table:table-cell>';
-                } elseif ($cell->isError() && \is_string($cell->getValueEvenIfError())) {
+                } elseif ($cellType === Cell::TYPE_ERROR && \is_string($cell->getValueEvenIfError())) {
                     // only writes the error value if it's a string
                     $data .= ' office:value-type="string" calcext:value-type="error" office:value="">';
                     $data .= '<text:p>'.$cell->getValueEvenIfError().'</text:p>';
                     $data .= '</table:table-cell>';
-                } elseif ($cell->isEmpty()) {
+                } elseif ($cellType === Cell::TYPE_EMPTY) {
                     $data .= '/>';
                 } else {
                     throw new InvalidArgumentException('Trying to add a value with an unsupported type: '.\gettype($cellValue));
