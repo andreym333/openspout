@@ -14,7 +14,7 @@ interface EscaperInterface
      *
      * @return string The escaped string
      */
-    public function escape($string);
+    public static function escape($string);
 
     /**
      * Unescapes the given string to make it compatible with PHP.
@@ -23,5 +23,5 @@ interface EscaperInterface
      *
      * @return string The unescaped string
      */
-    public function unescape($string);
+    public static function unescape($string);
 }
