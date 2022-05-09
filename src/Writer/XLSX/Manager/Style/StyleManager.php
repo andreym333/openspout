@@ -5,6 +5,7 @@ namespace OpenSpout\Writer\XLSX\Manager\Style;
 use OpenSpout\Common\Entity\Style\BorderPart;
 use OpenSpout\Common\Entity\Style\Color;
 use OpenSpout\Common\Entity\Style\Style;
+use OpenSpout\Common\Helper\Escaper;
 use OpenSpout\Writer\XLSX\Helper\BorderHelper;
 
 /**
@@ -87,7 +88,7 @@ class StyleManager extends \OpenSpout\Writer\Common\Manager\Style\StyleManager
             /** @var Style $style */
             $style = $this->styleRegistry->getStyleFromStyleId($styleId);
             $format = $style->getFormat();
-            $tags[] = '<numFmt numFmtId="'.$numFmtId.'" formatCode="'.$format.'"/>';
+            $tags[] = '<numFmt numFmtId="'.$numFmtId.'" formatCode="'.Escaper\XLSX::escape($format).'"/>';
         }
         $content = '<numFmts count="'.\count($tags).'">';
         $content .= implode('', $tags);
