@@ -58,6 +58,14 @@ abstract class WriterAbstract implements WriterInterface
     }
 
     /**
+     * {@inheritdoc}
+     */
+    public function getDefaultRowStyle()
+    {
+        return $this->optionsManager->getOption(Options::DEFAULT_ROW_STYLE);
+    }
+
+    /**
      * Sets whether extra styles should be automatically applied.
      * This must be set before opening the writer.
      *

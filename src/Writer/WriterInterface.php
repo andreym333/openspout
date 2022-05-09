@@ -45,6 +45,13 @@ interface WriterInterface
     public function setDefaultRowStyle(Style $defaultStyle);
 
     /**
+     * Get default row style.
+     *
+     * @return Style
+     */
+    public function getDefaultRowStyle();
+
+    /**
      * Appends a row to the end of the stream.
      *
      * @param Row $row The row to be appended to the stream
