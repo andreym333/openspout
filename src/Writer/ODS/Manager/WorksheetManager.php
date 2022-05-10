@@ -21,9 +21,6 @@ use OpenSpout\Writer\ODS\Manager\Style\StyleManager;
  */
 class WorksheetManager implements WorksheetManagerInterface
 {
-    /** @var bool */
-    protected $shouldApplyExtraStyles;
-
     /** @var \OpenSpout\Common\Helper\Escaper\ODS Strings escaper */
     private $stringsEscaper;
 
@@ -49,7 +46,6 @@ class WorksheetManager implements WorksheetManagerInterface
         ODSEscaper $stringsEscaper,
         StringHelper $stringHelper
     ) {
-        $this->shouldApplyExtraStyles = $optionsManager->getOption(Options::SHOULD_APPLY_EXTRA_STYLES);
         $this->styleManager = $styleManager;
         $this->styleMerger = $styleMerger;
         $this->stringsEscaper = $stringsEscaper;
@@ -101,6 +97,7 @@ class WorksheetManager implements WorksheetManagerInterface
     {
         $cells = $row->getCells();
         $rowStyle = $row->getStyle();
+        $serializedRowStyle = $rowStyle->serialize();
 
         $data = '<table:table-row table:style-name="ro1">';
 
@@ -119,37 +116,22 @@ class WorksheetManager implements WorksheetManagerInterface
 
                 // Merging the cell style with its row style, applying and register it
 
-                $isMatchingRowStyle = false;
                 $cellStyle = $cell->getStyle();
+                $serializedCellStyle = $cellStyle->serialize();
 
-                $mergedCellAndRowStyle = $this->styleMerger->merge($cellStyle, $rowStyle);
-                $cell->setStyle($mergedCellAndRowStyle);
+                if (!isset($this->registeredStylesCache[$serializedRowStyle][$serializedCellStyle])) {
+                    $mergedCellAndRowStyle = $this->styleMerger->merge($cellStyle, $rowStyle);
 
-                $possiblyUpdatedStyle = $this->shouldApplyExtraStyles
-                    ? $this->styleManager->applyExtraStylesIfNeeded($cell)
-                    : null;
-
-                if ($possiblyUpdatedStyle && $possiblyUpdatedStyle->isUpdated()) {
-                    $newCellStyle = $possiblyUpdatedStyle->getStyle();
-                } else {
-                    $newCellStyle = $mergedCellAndRowStyle;
-                    $isMatchingRowStyle = $cellStyle->isEmpty();
+                    $this->registeredStylesCache[$serializedRowStyle][$serializedCellStyle] =
+                        $this->styleManager->registerStyle($mergedCellAndRowStyle);
                 }
 
-                $serializedStyle = $newCellStyle->serialize();
-                if (!isset($this->registeredStylesCache[$serializedStyle])) {
-                    $this->registeredStylesCache[$serializedStyle] = $this->styleManager->registerStyle($newCellStyle);
-                }
-
-                $cellStyle = $this->registeredStylesCache[$serializedStyle];
-                if ($isMatchingRowStyle) {
-                    $rowStyle = $cellStyle; // Replace actual rowStyle (possibly with null id) by registered style (with id)
-                }
+                $registeredStyle = $this->registeredStylesCache[$serializedRowStyle][$serializedCellStyle];
 
                 // Generate the cell XML content
 
                 $cellType = $cell->getType();
-                $styleId = $cellStyle->getId();
+                $styleId = $registeredStyle->getId();
 
                 $data .= '<table:table-cell table:style-name="ce'.($styleId + 1).'"';
 

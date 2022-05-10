@@ -44,9 +44,6 @@ class WorksheetManager implements WorksheetManagerInterface
     /** @var bool Whether inline or shared strings should be used */
     protected $shouldUseInlineStrings;
 
-    /** @var bool */
-    protected $shouldApplyExtraStyles;
-
     /** @var OptionsManagerInterface */
     private $optionsManager;
 
@@ -100,7 +97,6 @@ class WorksheetManager implements WorksheetManagerInterface
     ) {
         $this->optionsManager = $optionsManager;
         $this->shouldUseInlineStrings = $optionsManager->getOption(Options::SHOULD_USE_INLINE_STRINGS);
-        $this->shouldApplyExtraStyles = $optionsManager->getOption(Options::SHOULD_APPLY_EXTRA_STYLES);
         $this->setDefaultColumnWidth($optionsManager->getOption(Options::DEFAULT_COLUMN_WIDTH));
         $this->setDefaultRowHeight($optionsManager->getOption(Options::DEFAULT_ROW_HEIGHT));
         $this->columnWidths = $optionsManager->getOption(Options::COLUMN_WIDTHS) ?? [];
@@ -307,6 +303,7 @@ class WorksheetManager implements WorksheetManagerInterface
         $this->ensureSheetDataStated($worksheet);
         $sheetFilePointer = $worksheet->getFilePointer();
         $rowStyle = $row->getStyle();
+        $serializedRowStyle = $rowStyle->serialize();
         $rowIndexOneBased = $worksheet->getLastWrittenRowIndex() + 1;
         $numCells = $row->getNumCells();
 
@@ -326,37 +323,22 @@ class WorksheetManager implements WorksheetManagerInterface
 
             // Merging the cell style with its row style, applying and register it
 
-            $isMatchingRowStyle = false;
             $cellStyle = $cell->getStyle();
+            $serializedCellStyle = $cellStyle->serialize();
 
-            $mergedCellAndRowStyle = $this->styleMerger->merge($cellStyle, $rowStyle);
-            $cell->setStyle($mergedCellAndRowStyle);
+            if (!isset($this->registeredStylesCache[$serializedRowStyle][$serializedCellStyle])) {
+                $mergedCellAndRowStyle = $this->styleMerger->merge($cellStyle, $rowStyle);
 
-            $possiblyUpdatedStyle = $this->shouldApplyExtraStyles
-                ? $this->styleManager->applyExtraStylesIfNeeded($cell)
-                : null;
-
-            if ($possiblyUpdatedStyle && $possiblyUpdatedStyle->isUpdated()) {
-                $newCellStyle = $possiblyUpdatedStyle->getStyle();
-            } else {
-                $newCellStyle = $mergedCellAndRowStyle;
-                $isMatchingRowStyle = $cellStyle->isEmpty();
+                $this->registeredStylesCache[$serializedRowStyle][$serializedCellStyle] =
+                    $this->styleManager->registerStyle($mergedCellAndRowStyle);
             }
 
-            $serializedStyle = $newCellStyle->serialize();
-            if (!isset($this->registeredStylesCache[$serializedStyle])) {
-                $this->registeredStylesCache[$serializedStyle] = $this->styleManager->registerStyle($newCellStyle);
-            }
-
-            $cellStyle = $this->registeredStylesCache[$serializedStyle];
-            if ($isMatchingRowStyle) {
-                $rowStyle = $cellStyle; // Replace actual rowStyle (possibly with null id) by registered style (with id)
-            }
+            $registeredStyle = $this->registeredStylesCache[$serializedRowStyle][$serializedCellStyle];
 
             // Generate the cell XML content
 
             $cellType = $cell->getType();
-            $styleId = $cellStyle->getId();
+            $styleId = $registeredStyle->getId();
 
             if (!isset($this->columnLettersCache[$columnIndexZeroBased])) {
                 $this->columnLettersCache[$columnIndexZeroBased] = CellHelper::getColumnLettersFromColumnIndex($columnIndexZeroBased);
